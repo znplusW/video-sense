@@ -1,0 +1,4 @@
+interface:
+  display_name: "动态视听"
+  short_description: "获取视频画面、独立音频及字幕转写证据，由 Agent 理解视听内容"
+  default_prompt: "使用 $video-sense 获取视听证据，优先查看能补足字幕与转写信息、以及我特别关注部分的组图；根据新增信息与耗时决定查看范围，必要时定点补看，再综合回答。"

@@ -1,0 +1,22 @@
+{
+  "sha256": {
+    "cuts.js": "311e4770c62f4ccb5daacf7a38499907eb2f33631e7c55934a2056fc6a617142",
+    "sheet.js": "b7ea3f4791ccdd54df402a72a5c0ab99f3b5885cea372bd1482cc64b5f3d0647",
+    "scale.js": "0d82c7e8054a352ebf4a43a804d5b02fdd5512b930ce25f4c9dfce267c5fc16c",
+    "pipeline.js": "5244611310d80ca83ca8a120274740aa9988a4aecd86c2829ec0f4a18ee6eac7",
+    "tiers.js": "be7bf28b8227c72f5bc05e0b3b5ee35d3a150bf8120344572822aefdf49ffb55",
+    "png.js": "6288760abcf4845c9a64f70b115af2f89073c2be6192409ff9b2b9ec1689cc44",
+    "capture.js": "82c1b0ae89295ec635d4b5b6d594abbce8aae3516f1f6416d1f39eb51112bc82",
+    "pack.js": "5dabc6ba0b9dfe69a198a52f514ff9ebc1a6dcdf1266d6b822a85f2c8dbdf6ad"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "commit": "af33bbc750e267267a9cb2c35640c81f8ca1f2be",
+  "repository": "https://github.com/SAOS-3624/dsh-see-now",
+  "vendoredFilesUnmodified": false,
+  "localModifications": {
+    "pipeline.js": {
+      "sha256": "2c2d27cc38709109e13c3662ddca6875b90e4a17979dbc595a6e3682eead1d36",
+      "description": "0.5.3 optional render-only callback and actual output dimensions/layout metadata; original selection and batching unchanged"
+    }
+  }
+}

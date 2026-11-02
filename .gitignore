@@ -1,0 +1,7 @@
+node_modules/
+work/
+config/*.local.json
+config/*.local.toml
+__pycache__/
+*.pyc
+*.log

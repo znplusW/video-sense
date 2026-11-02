@@ -1,0 +1,14 @@
+{
+  "backend": "faster-whisper",
+  "python": "C:/Path/To/Python/python.exe",
+  "model": "C:/Path/To/faster-whisper-small",
+  "device": "cpu",
+  "computeType": "int8",
+  "cpuThreads": 4,
+  "beamSize": 5,
+  "language": null,
+  "wordTimestamps": true,
+  "allowDownload": false,
+  "idleSeconds": 120,
+  "timeoutSeconds": 600
+}

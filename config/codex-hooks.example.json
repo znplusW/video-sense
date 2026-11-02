@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "video-sense",
+            "tool": "video_guard",
+            "input": {},
+            "timeout": 10,
+            "statusMessage": "检查宿主选定的视频证据范围"
+          }
+        ]
+      }
+    ]
+  }
+}
