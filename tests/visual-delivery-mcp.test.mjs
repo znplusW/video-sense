@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir,writeFile } from 'node:fs/promises';
+import { mkdir,writeFile,readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -16,7 +16,7 @@ const transfer={mode:'download_fallback',status:'complete',reason:'Controlled sa
 async function fixture({count=9,kind='url',status='complete',mode='continuous',missingTrack=false}={}){
   const id=randomUUID(),mediaId='media_'+id,directory=path.join(root,id),trackId=randomUUID();await mkdir(path.join(directory,'transcripts'),{recursive:true});
   const segments=Array.from({length:3},(_,i)=>({id:'cue-'+i,start:i*3,end:(i+1)*3,text:['第一段原文','第二段原文','最后一段原文'][i],final:true,revision:1,sourceType:'subtitle'}));
-  const track={id:trackId,mediaId,schemaVersion:'1',status:'complete',source:{type:'subtitle',subtitleKind:'manual'},
+  const track={id:trackId,mediaId,origin:'media_task',schemaVersion:'1',status:'complete',source:{type:'subtitle',subtitleKind:'manual'},
     timeBase:'source_media_seconds',timeUnit:'seconds',binding:{basis:'Controlled saved fixture',syncVerified:false},mapping:{offsetSeconds:0},
     requestedRange:{start:0,end:9},processedRanges:[{start:0,end:9}],alignment:'aligned',segments,events:segments.map((s,i)=>({sequence:i+1,...s}))};
   const {segments:unusedSegments,events:unusedEvents,...trackSummary}=track;
@@ -37,8 +37,7 @@ async function fixture({count=9,kind='url',status='complete',mode='continuous',m
 }
 const normal=await fixture(),holes=await fixture(),failed=await fixture({count:2,status:'error'}),overview=await fixture({count:2,mode:'overview'}),
   audio=await fixture({count:0,kind:'audio',status:'ready'}),cancel=await fixture({count:3}),
-  noImages=await fixture({count:0}),imported=await fixture({count:2}),brokenEvidence=await fixture({count:3,missingTrack:true});
-const subtitleFile=path.join(root,'supplied.srt');await writeFile(subtitleFile,'1\n00:00:00,000 --> 00:00:09,000\n外部提供的字幕原文。\n');
+  noImages=await fixture({count:0}),sameSource=await fixture({count:2}),brokenEvidence=await fixture({count:3,missingTrack:true});
 let client;
 test.before(async()=>{
   client=new Client({name:'visual-delivery-stdio-test',version:'1.0.0'});
@@ -58,9 +57,11 @@ async function call(name,args){
 }
 
 test('standalone MCP exposes the registered batch tool and bounded schema',async()=>{
-  assert.equal(client.getServerVersion().version,'0.8.0');
+  assert.equal(client.getServerVersion().version,'0.9.0');
   const list=await client.listTools(),schema=list.tools.find(t=>t.name==='video_read').inputSchema;
-  assert.equal(list.tools.length,19);assert.equal(schema.properties.limit.minimum,1);assert.equal(schema.properties.limit.maximum,12);
+  assert.ok(!list.tools.some(t=>t.name==='transcript_import'));
+  assert.equal(list.tools.find(t=>t.name==='video_review').inputSchema.properties.textTrackIds,undefined);
+  assert.equal(list.tools.length,18);assert.equal(schema.properties.limit.minimum,1);assert.equal(schema.properties.limit.maximum,12);
   assert.equal(schema.properties.after.minimum,-1);assert.equal(schema.properties.waitSeconds.maximum,20);assert.deepEqual(schema.required,['id']);
 });
 
@@ -110,13 +111,47 @@ test('error/overview/no-image results cannot become complete continuous video ev
   const empty=await call('video_read',{id:noImages.id,waitSeconds:0});assert.equal(empty.images.length,0);assert.equal(empty.info.visualDelivery.allDelivered,false);
 });
 
-test('subtitle import and combined evidence return visual progress without describing image content',async()=>{
-  const added=await call('transcript_import',{id:imported.id,mediaId:imported.mediaId,file:subtitleFile,bindingBasis:'Controlled fixture for this test media.'});
-  assert.equal(added.info.status,'complete');assert.equal(added.info.visualDelivery.deliveredSheets,0);
-  const evidence=await call('video_evidence',{id:imported.id,start:0,end:9,imageLimit:1});assert.equal(evidence.images.length,1);
+test('same-source saved subtitles and combined evidence retain provenance and visual progress',async()=>{
+  const text=await call('transcript_read',{id:sameSource.id});
+  assert.equal(text.info.status,'complete');assert.equal(text.info.visualDelivery.deliveredSheets,0);
+  const evidence=await call('video_evidence',{id:sameSource.id,start:0,end:9,imageLimit:1});assert.equal(evidence.images.length,1);
   assert.equal(evidence.info.visualDelivery.deliveredSheets,1);assert.equal(evidence.info.visualDelivery.allDelivered,false);
-  assert.ok(evidence.info.transcripts.some(t=>t.segments.some(s=>s.text==='外部提供的字幕原文。')));
+  assert.ok(evidence.info.transcripts.some(t=>t.segments.some(s=>s.text==='第一段原文')));
   assert.deepEqual(Buffer.from(evidence.images[0].data,'base64'),pngs[0]);
+});
+
+test('text pagination does not impose a review completion gate',async()=>{
+  const j=await fixture({count:2});
+  await call('video_review',{id:j.id,action:'plan',visual:'none'});
+  const page=await call('transcript_read',{id:j.id,limit:1});assert.equal(page.info.more,true);
+  const review=await call('video_review',{id:j.id,action:'finish'});
+  assert.equal(review.info.finished,true);assert.equal(review.info.text,undefined);
+});
+
+test('subtitle and ASR tracks coexist with distinct source text and explicit track selection',async()=>{
+  const j=await fixture({count:1}),asrId=randomUUID();
+  // Persist a controlled ASR-result fixture: this checks the MCP contract only,
+  // without invoking a speech model or claiming transcription accuracy.
+  const asrSegments=j.track.segments.map((s,i)=>({...s,id:'asr-'+i,text:['ASR wording one','ASR wording two','ASR wording three'][i],sourceType:'asr'}));
+  const asr={...j.track,id:asrId,source:{type:'asr',backend:'fixture-backend',model:'fixture-model'},
+    segments:asrSegments,events:asrSegments.map((s,i)=>({sequence:i+1,...s}))};
+  await writeFile(path.join(j.directory,'transcripts',asrId+'.json'),JSON.stringify(asr));
+  const manifestFile=path.join(j.directory,'manifest.json'),manifest=JSON.parse(await readFile(manifestFile,'utf8'));
+  const {segments:unusedSegments,events:unusedEvents,...summary}=asr;
+  manifest.transcriptTracks.push(summary);await writeFile(manifestFile,JSON.stringify(manifest));
+  const subtitles=await call('transcript_read',{id:j.id,trackId:j.trackId});
+  const transcript=await call('transcript_read',{id:j.id,trackId:asrId});
+  assert.equal(subtitles.info.source.type,'subtitle');assert.equal(transcript.info.source.type,'asr');
+  assert.deepEqual(subtitles.info.segments.map(s=>s.text),j.track.segments.map(s=>s.text));
+  assert.deepEqual(transcript.info.segments.map(s=>s.text),asrSegments.map(s=>s.text));
+  assert.equal(transcript.info.source.backend,'fixture-backend');
+  const latest=await call('transcript_read',{id:j.id});assert.equal(latest.info.id,asrId);
+  const evidence=await call('video_evidence',{id:j.id,start:0,end:9,imageLimit:0});
+  assert.equal(evidence.images.length,0);assert.equal(evidence.info.transcripts.length,2);
+  const byId=new Map(evidence.info.transcripts.map(t=>[t.trackId,t]));
+  assert.equal(byId.get(j.trackId).source.type,'subtitle');assert.equal(byId.get(asrId).source.type,'asr');
+  assert.deepEqual(byId.get(j.trackId).segments.map(s=>s.text),j.track.segments.map(s=>s.text));
+  assert.deepEqual(byId.get(asrId).segments.map(s=>s.text),asrSegments.map(s=>s.text));
 });
 
 test('failed combined evidence preserves prior delivery counts until the complete response is prepared',async()=>{
@@ -135,7 +170,6 @@ test('pure audio workflows do not acquire video-delivery requirements',async()=>
   const a=await call('audio_status',{id:audio.id});assert.equal(a.info.statuses.visual,'not_applicable');assert.equal(a.info.visualDelivery,undefined);
   const t=await call('transcript_read',{id:audio.id});assert.equal(t.info.status,'complete');assert.equal(t.images.length,0);
   assert.equal(t.info.visualStatus,undefined);assert.equal(t.info.visualDelivery,undefined);assert.equal(t.info.videoWorkflow,undefined);
-  const aImport=await call('transcript_import',{id:audio.id,mediaId:audio.mediaId,file:subtitleFile,bindingBasis:'Controlled audio fixture.'});assert.equal(aImport.info.visualDelivery,undefined);
   const denied=await client.callTool({name:'video_read',arguments:{id:audio.id,waitSeconds:0}});assert.equal(denied.isError,true);
 });
 

@@ -29,9 +29,9 @@ const call=async(name,args={})=>{
 try{
   await client.connect(new StdioClientTransport({command:config.command,args:[path.join(root,'src/server.mjs')],
     env:{...process.env,...config.env,AGENT_VIDEO_DATA_DIR:path.join(directory,'data')},stderr:'pipe'}));
-  assert.equal(client.getServerVersion().version,'0.7.0');
+  assert.equal(client.getServerVersion().version,'0.9.0');
   console.log(JSON.stringify({server:client.getServerVersion(),phase:'starting'}));
-  const first=await call('video_url_start',{url,start:0,end:30,quality:'low'});id=first.id;
+  const first=await call('video_url_start',{url,start:0,end:30,quality:'low',firstImage:true});id=first.id;
   assert.notEqual(first.status,'error',JSON.stringify(first));
   console.log(JSON.stringify({phase:'first_image',ready:first.firstImageReady,elapsedMs:Math.round(performance.now()-started)}));
   let state=await call('video_status',{id,waitSeconds:20});

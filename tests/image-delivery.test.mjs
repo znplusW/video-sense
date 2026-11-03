@@ -90,7 +90,7 @@ test('cancelled cached reads and PNG encodes give no output; budgets include PNG
 test('MCP default JPEG batch12, explicit PNG and restart replay retain bytes, order and receipts',async()=>{
   const {id,directory}=await fixture();let c=await client(),first,reviewId;
   try{
-    const list=await c.listTools();assert.equal(list.tools.length,19);
+    const list=await c.listTools();assert.equal(list.tools.length,18);
     assert.ok(!list.tools.some(t=>['screen_start','screen_next'].includes(t.name)));
     const schema=list.tools.find(t=>t.name==='video_read').inputSchema;
     assert.equal(schema.properties.limit.maximum,12);assert.deepEqual(schema.properties.format.enum,['jpeg','png']);

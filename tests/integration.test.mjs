@@ -115,8 +115,8 @@ test('MCP stdio: initialize, discover, asynchronous job, real image block, error
     env:{...process.env,AGENT_VIDEO_DATA_DIR:path.join(root,'mcp-jobs'),AGENT_VIDEO_FFMPEG:FFMPEG,AGENT_VIDEO_FFPROBE:FFPROBE},stderr:'pipe'});
   try{
     await client.connect(transport);
-    const list=await client.listTools();assert.equal(list.tools.length,19);
-    assert.equal(client.getServerVersion().version,'0.8.0');
+    const list=await client.listTools();assert.equal(list.tools.length,18);
+    assert.equal(client.getServerVersion().version,'0.9.0');
     const call=(name,args={})=>client.callTool({name,arguments:args});
     const doctor=await call('video_doctor');assert.equal(JSON.parse(doctor.content[0].text).ffmpeg.ok,true);
     const start=await call('video_start',{file:clip,scene:true});assert.ok(!start.isError);

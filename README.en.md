@@ -4,23 +4,27 @@ English | [简体中文](README.md)
 
 **Inspectable, traceable video and audio evidence for AI agents.**
 
-video-sense is a local MCP server with an optional, host-neutral Skill. Give it video or audio and receive adaptively selected images, original subtitles or speech transcripts, timestamps, provenance and processing status. Your agent interprets that evidence to answer your question.
+video-sense is a local MCP server with an optional, host-neutral Skill. Give it video or audio and choose adaptively selected images, same-source subtitles, ASR text, or any needed combination, with timestamps, provenance and processing status. Your agent interprets that evidence to answer your question.
 
-Current version: **0.8.0**. The installation scripts and distribution target **Windows**. Any compatible stdio MCP client can connect; Codex and WorkBuddy are examples, not runtime requirements. macOS/Linux installation has not been validated as a supported experience.
+Current version: **0.9.0**. The installation scripts and distribution target **Windows**. Any compatible stdio MCP client can connect; Codex and WorkBuddy are examples, not runtime requirements. macOS/Linux installation has not been validated as a supported experience.
 
 ## Features
 
 - **Video evidence:** local files, HTTP(S) media URLs and on-demand pages supported by yt-dlp. Analyze a range, process continuously, take a sparse overview or inspect a specific time.
-- **Independent audio:** open audio without creating a video job. Import matching subtitles/external transcripts or use optional local faster-whisper ASR.
+- **Independent audio:** open audio without creating a video job. Fetch available subtitles from the same resolved source or use optional local faster-whisper ASR.
 - **Streaming first:** read network media incrementally; after bounded recovery attempts fail, optionally download the corresponding complete track for local processing.
 - **Efficient image delivery:** JPEG by default, up to 12 storyboards and 8MiB of encoded image bytes per batch. Original PNGs remain available for checking fine text and diagrams. A storyboard can contain multiple frames.
 - **Shared installation:** one runtime source tree and one generic Skill, with separate client configurations, task data and processes.
+
+Images, subtitles and ASR are independently optional. For text only, use audio_start / audio_url_start even when the source is a video; no image job is needed. Calling video_start / video_url_start explicitly selects visual production. Network video startup returns task information only by default; firstImage=true explicitly requests an initial image when ready, and further images are fetched on demand.
 
 ## How it works
 
 Continuous analysis uses one FFmpeg process to decode video, selects frames adaptively from color and motion changes, and assembles timestamped images. The host agent chooses text, selected images, all images or targeted follow-up based on the question and evidence gaps.
 
 The MCP server returns **evidence, not image descriptions, summaries, semantic event tags or causal judgments**. Interpretation belongs to the host agent. Generation, delivery and inspection are separate states; the receipt protocol records the caller's inspection claims rather than proving comprehension.
+
+The MCP accepts media inputs, not external subtitle/transcript files. The host verifies and uses externally supplied text directly, requesting images at verified source timestamps when needed. Text does not drive frame selection. The MCP retains text processing status, coverage and pagination, but does not track whether the agent has read the text or gate image-review completion on it. The host judges sufficiency for the task.
 
 Adaptive sampling is not exhaustive frame-by-frame inspection and may miss brief changes. Fine-grained, high-frequency extraction is a slower option requiring separate tools. Screen capture, live viewing companionship, microphone capture and system-audio capture are not provided.
 
@@ -31,7 +35,7 @@ Adaptive sampling is not exhaustive frame-by-frame inspection and may miss brief
 - **Node.js 20+**.
 - **FFmpeg and FFprobe**, available on PATH or supplied by explicit paths.
 - A client supporting stdio MCP. Visual workflows additionally require image delivery to a vision-capable model.
-- Optional ASR: separately installed Python, faster-whisper and model files. Visual analysis and imported text do not require ASR.
+- Optional ASR: separately installed Python, faster-whisper and model files. Visual analysis and same-source network subtitles do not require ASR.
 
 Download the portable ZIP from this repository's Releases and extract it to a stable shared location, such as `D:\AgentTools\video-sense`. It includes production npm dependencies and Windows yt-dlp, but not Node, FFmpeg, Python or ASR models.
 
@@ -61,7 +65,7 @@ For manual setup, configure a stdio server whose `command` is your Node executab
 
 ### 3. Verify the connection
 
-Ask the agent to call `video_doctor` and verify the version and dependencies, then `video_help` for the complete workflow and data contracts. An unconfigured ASR backend does not disable images or subtitle imports.
+Ask the agent to call `video_doctor` and verify the version and dependencies, then `video_help` for the complete workflow and data contracts. An unconfigured ASR backend does not disable images or available same-source network subtitles.
 
 ### 4. Optional generic Skill
 
@@ -81,16 +85,17 @@ Configure each host to discover this shared directory. Windows clients that supp
 >
 > Transcribe the first three minutes of this audio file and retain timestamps.
 
-The host decides whether ASR is needed and which images to inspect. Not every task requires reading every storyboard.
+In the MCP interface, subtitles and ASR are peer sources: the host may request subtitles only, ASR only, or both. Existing subtitles do not prohibit ASR, and both are not started automatically for every task. When using both, create separate tracks and read each with its explicit trackId. The MCP preserves their sources and original text without merging them or deciding which is more trustworthy. The optional Skill defaults to reliable available subtitles for language content, then ASR when subtitles are missing, incomplete, unreliable or need cross-checking. This is guidance, not an MCP restriction, and does not prohibit dual-track comparison. The host can inspect selected storyboards and request additional interval or timestamp-specific images where needed; not every task requires every storyboard.
 
 ## Optional ASR and data
 
-Adapt `config/asr.example.json` to your Python/model installation and save it as `ConfigDir/asr.json`, or pass `-AsrConfig` to select another file. Models are not downloaded automatically. A missing default file means ASR is unconfigured; a missing explicitly configured file is an error.
+Adapt `config/asr.example.json` to your Python/model installation and save it as `ConfigDir/asr.json`, or pass `-AsrConfig` to select another file. Multiple clients may point AGENT_VIDEO_ASR_CONFIG (or -AsrConfig) to one external shared JSON and reuse one Python environment and model installation. Separate MCP processes may still load separate model instances; this is not a shared resident ASR service. Models are not downloaded automatically. A missing default file means ASR is unconfigured; a missing explicitly configured file is an error.
 
 Task data defaults to `ConfigDir/data`; override it with `-DataDir`. Network resolution accesses source sites. The MCP does not invoke a cloud understanding model itself, but its returned evidence is passed to the host agent and handled according to that host's settings. Keep credentials, private configurations, media caches and transcripts out of public repositories.
 
 ## Limitations and troubleshooting
 
+- Subtitle fetching supports tracks offered by network sources. Local embedded and sidecar subtitles are not automatically extracted. Burned-in text may appear in selected images, but is not extracted as a complete text track or guaranteed to be fully covered.
 - Website support, authenticated content, DRM and live streams are not guaranteed; respect source access permissions.
 - Adaptive sampling and ASR can omit or misinterpret information. Mechanical timestamp intersections do not prove semantic relationships.
 - Reconnect/restart the client after runtime or configuration changes.

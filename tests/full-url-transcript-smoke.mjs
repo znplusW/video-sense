@@ -20,7 +20,7 @@ const call=async(name,args={})=>{
 try{
   await client.connect(new StdioClientTransport({command:config.command,args:[fileURLToPath(new URL('../src/server.mjs',import.meta.url))],
     env:{...process.env,...config.env,AGENT_VIDEO_DATA_DIR:path.join(directory,'data')},stderr:'pipe'}));
-  assert.equal(client.getServerVersion().version,'0.7.0');
+  assert.equal(client.getServerVersion().version,'0.9.0');
   const j=await call('video_url_start',{url,analysis:'overview'});id=j.id;
   assert.notEqual(j.status,'error',JSON.stringify(j));
   const subtitles=await call('transcript_start',{id,mode:'subtitles'});

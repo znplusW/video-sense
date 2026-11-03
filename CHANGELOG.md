@@ -1,3 +1,29 @@
+# 0.9.0
+
+## 简体中文
+
+- 输入收敛为视频／音频文件与链接，输出画面、同源网络字幕及可选 ASR 原文。
+- 移除外部字幕／转写导入接口；外部文字由 Agent 核对来源后直接使用，按已确认时码请求图片。
+- 移除必读文字轨及文字分页完成门槛。保留处理状态、覆盖范围、分页和同源证据时间查询；图片阅读协议继续工作。
+- 同步 MCP 独立说明、通用 Skill 及中英文产品文档。不强制全图或 ASR，取证充分性由宿主判断。
+- 画面生成也可选；只取文字可通过 audio 入口打开视频源。video_url_start 默认只返回任务信息，新增 firstImage=true 可主动请求首图。
+- 字幕与 ASR 并列，支持按任务只取其中一种或两者分别输出，不自动合并或裁决。
+- 已有外部导入轨文件保留，但不再通过文字读取或时间段证据返回为同源文字；旧版同源生成轨仍可读取。
+
+这是接口不兼容更新：旧调用方应刷新工具列表并停止调用导入接口或传入文字阅读计划参数。重新连接 MCP 后使用 video_help 查看当前流程。
+
+## English
+
+- Media-only inputs: local/network video or audio; outputs remain images, same-source network subtitles and optional ASR text.
+- Removed external subtitle/transcript import. The host verifies and uses external text directly, requesting images at verified media timestamps.
+- Removed required-text-track and text-pagination completion gates. Processing status, coverage, pagination and same-source time-based evidence remain available; image receipts remain in place.
+- Updated standalone MCP guidance, generic Skill and bilingual documentation. No mandatory all-images or ASR policy; the host judges evidence sufficiency.
+- Visual production is optional too: audio entry points can open video sources for text only. video_url_start now returns task information by default; firstImage=true explicitly requests an initial image.
+- Subtitles and ASR are peer sources, selectable separately or together as distinct tracks without automatic merging or credibility ranking.
+- Existing imported-track files are retained but no longer returned as same-source text through transcript reads or interval evidence. Legacy same-source generated tracks remain readable.
+
+This is a breaking interface change. Refresh tool discovery, stop calling the import tool or passing text-review plan parameters, and reconnect the MCP. See video_help for current workflows.
+
 # 0.8.0
 
 ## 简体中文

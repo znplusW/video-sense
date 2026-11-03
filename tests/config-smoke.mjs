@@ -9,8 +9,8 @@ const client=new Client({name:'configuration-smoke',version:'1.0.0'});
 try {
   await client.connect(new StdioClientTransport({command:config.command,args:config.args,env:{...process.env,...config.env},stderr:'pipe'}));
   const version=client.getServerVersion();
-  assert.equal(version.name,'video-sense');assert.equal(version.title,'动态视听');assert.equal(version.version,'0.8.0');assert.match(version.description,/颜色与运动变化/);assert.match(version.description,/纯音频/);
-  const tools=await client.listTools();assert.equal(tools.tools.length,19);
+  assert.equal(version.name,'video-sense');assert.equal(version.title,'动态视听');assert.equal(version.version,'0.9.0');assert.match(version.description,/颜色与运动变化/);assert.match(version.description,/纯音频/);
+  const tools=await client.listTools();assert.equal(tools.tools.length,18);
   const doctor=await client.callTool({name:'video_doctor',arguments:{}});
   const state=JSON.parse(doctor.content[0].text);assert.equal(state.ffmpeg.ok,true);assert.equal(state.ffprobe.ok,true);
   assert.equal(state.ytDlp.ok,true);

@@ -152,13 +152,24 @@ test('redirects and nested HTTP manifest requests cannot reach private hosts',{t
   finally{await s.close();}
 });
 
-test('MCP URL start returns first image, video_next retains order and schema exposes URL support',{timeout:30000},async()=>{
+test('MCP URL start defaults to metadata; explicit firstImage keeps ordered image receipts',{timeout:30000},async()=>{
   const client=new Client({name:'network-integration',version:'1.0.0'});
   const transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../src/server.mjs',import.meta.url))],env:{...process.env,AGENT_VIDEO_DATA_DIR:path.join(root,'mcp')},stderr:'pipe'});
   let id;
   try{
-    await client.connect(transport);assert.equal(client.getServerVersion().version,'0.7.0');
-    const start=await client.callTool({name:'video_url_start',arguments:{url:origin+'/clip.mp4',end:4,scene:true}});
+    await client.connect(transport);assert.equal(client.getServerVersion().version,'0.9.0');
+    const tools=(await client.listTools()).tools;
+    assert.equal(tools.find(t=>t.name==='video_url_start').inputSchema.properties.firstImage.type,'boolean');
+    const metadata=await client.callTool({name:'video_url_start',arguments:{url:origin+'/clip.mp4',end:4,scene:true}});
+    assert.ok(!metadata.isError,JSON.stringify(metadata));const job=JSON.parse(metadata.content[0].text);
+    assert.equal(metadata.content.filter(x=>x.type==='image').length,0);assert.ok(!job.visualReview?.pendingBatch);
+    const state=await client.callTool({name:'video_status',arguments:{id:job.id,waitSeconds:20}});
+    const completed=JSON.parse(state.content[0].text);assert.equal(completed.status,'complete');assert.ok(completed.sheets>0);
+    assert.ok(!completed.visualReview?.pendingBatch,'image production alone must not require a viewing receipt');
+    const optional=await client.callTool({name:'video_next',arguments:{id:job.id,after:-1,waitSeconds:0}});
+    assert.ok(optional.content.some(x=>x.type==='image'),'images remain available when the host chooses to read them');
+    await client.callTool({name:'session_stop',arguments:{id:job.id}});
+    const start=await client.callTool({name:'video_url_start',arguments:{url:origin+'/clip.mp4',end:4,scene:true,firstImage:true}});
     assert.ok(!start.isError,JSON.stringify(start));const info=JSON.parse(start.content[0].text);id=info.id;
     assert.equal(info.firstImageReady,true);assert.ok(start.content.some(x=>x.type==='image'));
     const batch=info.visualReview.pendingBatch;await client.callTool({name:'video_review',arguments:{id,action:'ack',batchId:batch.batchId,viewedIndices:batch.indices}});

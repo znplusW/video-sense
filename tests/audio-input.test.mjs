@@ -20,10 +20,6 @@ for(const [extension,codec] of [['wav','pcm_s16le'],['mp3','libmp3lame'],['flac'
   await exec(FFMPEG,['-v','error','-n','-f','lavfi','-i','sine=frequency=440:sample_rate=16000:duration=6','-c:a',codec,file],{windowsHide:true,timeout:15000});
   fixtures['/tone.'+extension]=await readFile(file);
 }
-const captions=path.join(root,'words.srt'),external=path.join(root,'external.json'),untimed=path.join(root,'untimed.json');
-await writeFile(captions,'1\n00:00:00,000 --> 00:00:01,000\nOutside\n\n2\n00:00:02,000 --> 00:00:04,000\nOriginal supplied words\n\n3\n00:00:05,000 --> 00:00:06,000\nLater\n');
-await writeFile(external,JSON.stringify({timeBase:'clip_relative_seconds',segments:[{start:0,end:1,text:'External original'}]}));
-await writeFile(untimed,JSON.stringify({text:'Original untimed full text'}));
 const slow=wav(Buffer.alloc(180*32000));
 const unknown=wav(Buffer.alloc(6*32000));unknown.writeUInt32LE(0xffffffff,4);unknown.writeUInt32LE(0xffffffff,40);
 let slowBytes=0,fullTransfers=0,slowActive=0;
@@ -55,7 +51,6 @@ const origin=`http://127.0.0.1:${web.address().port}`;
 const priorOrigin=process.env.AGENT_VIDEO_TEST_NETWORK_ORIGIN;process.env.AGENT_VIDEO_TEST_NETWORK_ORIGIN=origin;
 test.after(()=>{web.closeAllConnections();web.close();if(priorOrigin===undefined)delete process.env.AGENT_VIDEO_TEST_NETWORK_ORIGIN;else process.env.AGENT_VIDEO_TEST_NETWORK_ORIGIN=priorOrigin;});
 console.log('Audio-only validation artifacts: '+root);
-const bind=(j,file,extra={})=>({id:j.id,mediaId:j.mediaId,file,bindingBasis:'Generated for this exact source fixture.',...extra});
 async function ready(service,j){const st=await service.audio.status(j.id,20);assert.equal(st.status,'ready',JSON.stringify(st));return st;}
 async function finished(service,id,trackId){let after=0,t;do{t=await service.text.read({id,trackId,after,waitSeconds:20});after=t.nextAfter;}while(['starting','running'].includes(t.status));return service.text.read({id,trackId,limit:500});}
 async function noImages(j){const files=await readdir(j.directory,{recursive:true});assert.ok(!files.some(f=>/\.png$|sheet-/.test(f)),files.join(','));assert.equal(j.worker,null);assert.equal(j.kind,'audio');}
@@ -74,17 +69,12 @@ test('common local audio formats register without video workers, images or autom
   }finally{await service.close();}
 });
 
-test('audio-bound subtitles/JSON preserve source/offset, range coverage and unaligned text without ASR',async()=>{
-  const service=new VideoService({dataDir:path.join(root,'imports')});
+test('local audio has no external-text import and remains independent of image tools',async()=>{
+  const service=new VideoService({dataDir:path.join(root,'local-text-boundary')});
   try{
     const j=await ready(service,await service.audio.start({file:path.join(root,'tone.wav'),start:2,end:4}));
-    await assert.rejects(()=>service.text.import(bind(j,captions,{mediaId:'wrong'})),/mediaId/);
-    const track=await service.text.import(bind(j,captions));const text=await service.text.read({id:j.id,trackId:track.id});
-    assert.equal(text.segments.length,1);assert.equal(text.segments[0].text,'Original supplied words');assert.equal(text.binding.syncVerified,false);
-    assert.deepEqual(text.processedRanges,[{start:2,end:4}]);assert.equal(text.source.type,'subtitle');
-    const other=await service.text.import(bind(j,external,{offsetSeconds:2,sourceType:'external_transcript'}));
-    const mapped=await service.text.read({id:j.id,trackId:other.id});assert.equal(mapped.segments[0].start,2);assert.equal(mapped.segments[0].originalStart,0);
-    const full=await service.text.import(bind(j,untimed));const raw=await service.text.read({id:j.id,trackId:full.id});assert.equal(raw.alignment,'unaligned');assert.equal(raw.unalignedText,'Original untimed full text');assert.deepEqual(raw.segments,[]);
+    assert.equal(service.text.import,undefined);
+    const text=await service.text.read({id:j.id});assert.equal(text.status,'not_enabled');assert.deepEqual(text.segments,[]);
     await assert.rejects(()=>service.sheet(j.id,0),/no images/);await assert.rejects(()=>service.nextSaved(j.id),/no images/);
     await assert.rejects(()=>service.text.evidence({id:j.id,start:2,end:4}),/transcript_read/);
     await noImages(await service.job(j.id));
@@ -135,21 +125,21 @@ test('missing audio duration needs an explicit finite range; chunked audio may r
   }finally{await service.close();}
 });
 
-test('audio-only MCP works with no Skill/ASR: schema, help, source binding and original text',async()=>{
+test('audio-only MCP works without Skill or ASR and cannot import external text',async()=>{
   const client=new Client({name:'audio-only-mcp-test',version:'1.0.0'});let id;
   try{
     await client.connect(new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../src/server.mjs',import.meta.url))],
       env:{...process.env,AGENT_VIDEO_DATA_DIR:path.join(root,'mcp'),AGENT_VIDEO_ASR_CONFIG:path.join(root,'no-asr.json')},stderr:'pipe'}));
-    const tools=(await client.listTools()).tools;assert.equal(tools.length,19);assert.equal(client.getServerVersion().version,'0.8.0');
+    const tools=(await client.listTools()).tools;assert.equal(tools.length,18);assert.equal(client.getServerVersion().version,'0.9.0');
     for(const name of ['audio_start','audio_url_start','audio_status'])assert.ok(tools.some(t=>t.name===name));
     const call=async(name,args={})=>{const value=await client.callTool({name,arguments:args});assert.ok(!value.isError,JSON.stringify(value));assert.ok(value.content.every(c=>c.type==='text'));return JSON.parse(value.content[0].text);};
     const help=await client.callTool({name:'video_help',arguments:{}});assert.ok(help.content[0].text.includes('audio_start'),'standalone guide documents audio_start');assert.match(client.getInstructions(),/Audio-only/);
     const started=await call('audio_start',{file:path.join(root,'tone.wav'),start:2,end:4});id=started.id;
     const source=await call('audio_status',{id,waitSeconds:20});assert.equal(source.status,'ready');
-    await call('transcript_import',bind(source,captions));
-    const text=await call('transcript_read',{id});assert.equal(text.segments[0].text,'Original supplied words');
+    assert.ok(!tools.some(t=>t.name==='transcript_import'));
+    const text=await call('transcript_read',{id});assert.equal(text.status,'not_enabled');assert.deepEqual(text.segments,[]);
     const unavailable=await client.callTool({name:'transcript_start',arguments:{id,mode:'asr'}});assert.equal(unavailable.isError,true);
-    const retained=await call('transcript_read',{id});assert.equal(retained.segments[0].text,'Original supplied words');
+    const retained=await call('transcript_read',{id});assert.equal(retained.status,'not_enabled');assert.deepEqual(retained.segments,[]);
     await call('session_stop',{id});assert.equal((await call('audio_status',{id})).status,'stopped');
   }finally{await client.close();}
 });
@@ -165,7 +155,6 @@ test('real optional ASR transcribes a standalone local file and survives changed
     assert.ok(t.segments.every(s=>s.start>=0&&s.end<=j.range.end+0.1));assert.ok(t.processedRanges.length);await noImages(await service.job(j.id));
     const mutable=path.join(root,'mutable.wav');await writeFile(mutable,fixtures['/tone.wav']);
     const old=await ready(service,await service.audio.start({file:mutable,start:1,end:2}));await appendFile(mutable,Buffer.from([0,0]));
-    await assert.rejects(()=>service.text.import(bind(old,captions)),/version changed/);
     const stale=await service.text.start({id:old.id,mode:'asr'});assert.equal((await finished(service,old.id,stale.id)).status,'error');
   }finally{await service.close();}
 });

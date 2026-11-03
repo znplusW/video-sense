@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { options,localFile,exec,FFMPEG,FFPROBE,exactFrame } from './media.mjs';
 import { webUrl,publicSource,YTDLP } from './network.mjs';
-import { TextService,mediaIdentity } from './text-service.mjs';
+import { TextService,mediaIdentity,sameSource } from './text-service.mjs';
 import { AudioService } from './audio-service.mjs';
 import { visualDelivery } from './visual-delivery.mjs';
 import { readImage,imageFormat,imageHash,assertImageBudget,MAX_IMAGES,MAX_IMAGE_BYTES } from './image-delivery.mjs';
@@ -14,7 +14,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const active=s=>s==='starting'||s==='running';
 const worker=fileURLToPath(new URL('./worker.mjs',import.meta.url));
 const networkWorker=fileURLToPath(new URL('./network-worker.mjs',import.meta.url));
-const VERSION='0.8.0';
+const VERSION='0.9.0';
 export class VideoService {
   constructor({dataDir=process.env.AGENT_VIDEO_DATA_DIR||path.resolve('work/video-sense-data')}={}) {
     this.root=path.resolve(dataDir);this.jobs=new Map();this.deliveries=new Map();this.closed=false;this.text=new TextService(this);this.audio=new AudioService(this);this.startQueue=Promise.resolve();this.imageRequests=new Set();
@@ -38,7 +38,7 @@ export class VideoService {
       try {const r=await exec(command,[name==='ytDlp'?'--version':'-version'],{windowsHide:true,timeout:10000});result[name]={ok:true,command,version:r.stdout.split(/\r?\n/)[0]};}
       catch(e){result[name]={ok:false,command,error:e.message};}
     }
-    result.asr=await this.text.doctor();result.transcriptFormats=['srt','vtt','json'];result.evidenceSchemaVersion='1';return result;
+    result.asr=await this.text.doctor();result.textSources=['same_source_network_subtitles','optional_asr'];result.externalTranscriptImport=false;result.textReadCompletionRequired=false;result.evidenceSchemaVersion='1';return result;
   }
   async startVideo(args) {
     const file=await localFile(args.file), start=args.start??0, end=args.end;
@@ -105,15 +105,15 @@ export class VideoService {
   }
   snapshot(j) {
     const {worker,persist,textPersist,touched,directory,resolved,resolvedAt,visualDelivery:priorDelivery,...publicData}=j;
-    const tracks=j.transcriptTracks??[],textStatus=tracks.some(t=>active(t.status))?'running':tracks.at(-1)?.status??'not_enabled';
-    if(j.kind==='audio')return {...publicData,directory,manifest:path.join(directory,'manifest.json'),
+    const tracks=(j.transcriptTracks??[]).filter(sameSource),textStatus=tracks.some(t=>active(t.status))?'running':tracks.at(-1)?.status??'not_enabled';
+    if(j.kind==='audio')return {...publicData,transcriptTracks:tracks,directory,manifest:path.join(directory,'manifest.json'),
       statuses:{source:j.status,transcript:textStatus,visual:'not_applicable'},audioAnalyzed:tracks.some(t=>t.source.type==='asr'&&t.processedRanges?.length>0),
       timeBase:'source_media_seconds',timeUnit:'seconds',timestampAccuracy:'Resampled audio sample position plus requested seek; ASR timings are estimates.',
       textCoverage:tracks.map(t=>({trackId:t.id,status:t.status,requestedRange:t.requestedRange,processedRanges:t.processedRanges,alignment:t.alignment,coverageBasis:t.coverageBasis}))};
     const processed=[...(j.coverage?.completedRanges??[])];
     const current=j.coverage?.plannedRanges?.find(r=>j.decodedThrough>=r.start&&j.decodedThrough<r.end&&!processed.some(p=>p.start===r.start&&p.end===r.end));
     if(current)processed.push({start:current.start,end:Math.min(current.end,j.decodedThrough+1/12)});
-    return {...publicData,directory,manifest:path.join(directory,'manifest.json'),schemaVersion:'1',statuses:{visual:j.status,transcript:textStatus},audioAnalyzed:tracks.some(t=>t.source.type==='asr'&&t.processedRanges?.length>0),
+    return {...publicData,transcriptTracks:tracks,directory,manifest:path.join(directory,'manifest.json'),schemaVersion:'1',statuses:{visual:j.status,transcript:textStatus},audioAnalyzed:tracks.some(t=>t.source.type==='asr'&&t.processedRanges?.length>0),
       timeBase:'source_media_seconds',timeUnit:'seconds',
       timestampAccuracy:'Requested input seek plus 12fps output sample grid; not exact original PTS.',
       visualCoverage:{...j.coverage,processedRanges:processed},visualDelivery:this.delivery(j),sampling:'adaptive visual sampling, not every second and not every original frame'};
@@ -126,7 +126,8 @@ export class VideoService {
     for(const index of indices)delivered.add(index);
   }
   async save(j) {
-    const data=JSON.stringify(this.snapshot(j),null,2);
+    // Retain legacy track metadata on disk, but do not serve it as current evidence.
+    const data=JSON.stringify({...this.snapshot(j),transcriptTracks:j.transcriptTracks??[]},null,2);
     j.persist=j.persist.catch(()=>{}).then(()=>writeFile(path.join(j.directory,'manifest.json'),data));
     await j.persist;
   }

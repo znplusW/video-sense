@@ -1,6 +1,6 @@
 {
   "name": "video-sense",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "Independent video and audio evidence over MCP: adaptive frames, subtitles, streaming audio and optional speech transcription",

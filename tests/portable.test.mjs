@@ -15,7 +15,7 @@ test('bootstrap executes through a shared directory junction',async()=>{
   const {stdout}=await promisify(execFile)(process.execPath,[path.join(link,'src/bootstrap.mjs'),'--cli','doctor'],{
     windowsHide:true,timeout:30000,env:{...process.env,AGENT_VIDEO_CONFIG_DIR:path.join(root,'client'),AGENT_VIDEO_DATA_DIR:path.join(root,'data'),AGENT_VIDEO_ASR_CONFIG:''}
   });
-  assert.equal(JSON.parse(stdout).version,'0.8.0');
+  assert.equal(JSON.parse(stdout).version,'0.9.0');
 });
 
 test('review atomic replacement retries transient Windows locks and preserves permanent errors',async()=>{

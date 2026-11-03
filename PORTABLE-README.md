@@ -1,21 +1,21 @@
-# 动态视听 video-sense 0.8.0 共享安装包
+# 动态视听 video-sense 0.9.0 共享安装包
 
-将工具包整体解压到一个共享目录。任意支持标准 stdio MCP 的 Agent 都可以从该目录启动服务；只需一份源码和依赖，每个客户端把自己的配置、ASR设置和任务数据安排在自己的目录。多个客户端通常各自启动一个进程；“共用源码”不表示共用进程或阅读确认状态。
+将工具包整体解压到一个共享目录。任意支持标准 stdio MCP 的 Agent 都可以从该目录启动服务；只需一份源码和依赖，各客户端保留自己的 MCP 配置和任务目录；ASR 配置可以分别保存，也可共同引用一份外置 JSON。多个客户端通常各自启动一个进程；“共用源码”不表示共用进程或阅读确认状态。
 
-本工具获取本地及网络音视频证据，不采集当前屏幕、不跟随播放器进度。视频仍是连续解码、自适应选帧和组图；0.8.0 以受管理的异步 FFmpeg 转码交付 JPEG，保留 PNG 原图和缓存。MCP 可独立使用，通用 Skill 仅辅助能力发现与取证选择。
+本工具获取本地及网络音视频证据，不采集当前屏幕、不跟随播放器进度。视频仍是连续解码、自适应选帧和组图；图片交付使用受管理的异步 FFmpeg 转码生成 JPEG，保留 PNG 原图和缓存。MCP 可独立使用，通用 Skill 仅辅助能力发现与取证选择。0.9.0 只接受媒体输入，画面、同源字幕和 ASR 三类数据独立按需选择；外部转写由 Agent 直接使用，不导入 MCP，文字阅读进度不进入图片完成检查。只取文字时可用 audio 入口打开音视频源，不创建图片任务。MCP 中字幕与 ASR 并列，Agent 按任务选择其一或两者；不自动双跑，不由 MCP 合并或裁决可信度。Skill 的默认取证顺序是先用可获取且来源可靠的字幕理解语言内容；字幕缺失、覆盖不足、不可靠，或任务需要核对时再使用 ASR 文本，也可保留双轨对照。这是宿主建议，不是 MCP 强制规则。
 
 ## Windows 安装与接入
 
 1. 准备 Node.js 20+、FFmpeg 和 FFprobe，放入 PATH 或下述可选 runtime 目录。包内不附带这些可执行文件或 ASR 模型。
 2. 在共享包目录运行下面的命令，把 `-ConfigDir` 换成所用 Agent 的配置目录。该脚本只生成配置片段，不替换宿主主配置，也不复制运行代码。
-3. 将生成的 `mcp.json` 中 `video-sense` 条目合并到客户端自己的 MCP 配置；字段包装形式以宿主要求为准，核心是 `command`、`args` 和 `env`。重连后用 `video_doctor` 确认版本0.8.0及依赖，再发现工具。
+3. 将生成的 `mcp.json` 中 `video-sense` 条目合并到客户端自己的 MCP 配置；字段包装形式以宿主要求为准，核心是 `command`、`args` 和 `env`。重连后用 `video_doctor` 确认版本0.9.0及依赖，再发现工具。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -ConfigDir 'D:\Agent-A\config\video-sense'
 powershell -NoProfile -ExecutionPolicy Bypass -File .\configure.ps1 -ConfigDir 'D:\Agent-B\config\video-sense'
 ```
 
-两个片段的 `args` 都指向同一共享包的 `src/bootstrap.mjs`，数据与ASR设置分别属于 Agent A 和 Agent B。安装时不会自动下载软件或模型，也不自动启用hook。
+两个片段的 `args` 都指向同一共享包的 `src/bootstrap.mjs`，数据分别属于 Agent A 和 Agent B；ASR 可以各自配置或共享。安装时不会自动下载软件或模型，也不自动启用hook。
 
 省略参数时，默认 `-Client generic`，配置写入用户 `~/.config/video-sense/generic`（设置了 `XDG_CONFIG_HOME` 时优先使用它）。为多个客户端接入时应分别传入其 `-ConfigDir`，避免共用同一个默认配置目录。
 
@@ -60,9 +60,16 @@ video-sense/
 
 ## 数据和可选ASR
 
-客户端片段设置 `AGENT_VIDEO_CONFIG_DIR` 和 `AGENT_VIDEO_DATA_DIR`。ASR默认检查该客户端配置目录的 `asr.json`，文件不存在表示未配置，不影响纯视觉或文本导入。`config/asr.example.json` 只是占位示例；需要ASR时按 AUDIO-TEXT.md 配置本机 Python 和模型，保存到自己的客户端目录。
+客户端片段设置 `AGENT_VIDEO_CONFIG_DIR` 和 `AGENT_VIDEO_DATA_DIR`。ASR默认检查该客户端配置目录的 `asr.json`，文件不存在表示未配置，不影响纯视觉或同源网络字幕获取。`config/asr.example.json` 只是占位示例；需要ASR时按 AUDIO-TEXT.md 配置本机 Python 和模型，保存到客户端目录，或用 -AsrConfig 指向共同的外置 JSON。
 
 `-AsrConfig` 可以显式指定其他ASR配置文件；相对路径以 `ConfigDir` 为基准。只有显式传入时，生成片段才添加 `AGENT_VIDEO_ASR_CONFIG`。显式指定的路径不存在会报告配置错误，不会静默采用共享包内配置或自动安装模型。
+
+ASR 由 MCP 调用配置的后端执行，不需要每个 Agent 重复安装。多个客户端可以把 AGENT_VIDEO_ASR_CONFIG 指向同一个外置共享 JSON，共用同一 Python 环境和模型文件；也可各用不同配置。各 MCP 进程仍可能分别加载模型，这不是共享的常驻 ASR 服务，内存占用不会因此自动合并。
+
+```powershell
+.\configure.ps1 -ConfigDir 'D:\AgentA\config\video-sense' -AsrConfig 'D:\SharedConfig\video-sense-asr.json'
+.\configure.ps1 -ConfigDir 'D:\AgentB\config\video-sense' -AsrConfig 'D:\SharedConfig\video-sense-asr.json'
+```
 
 其他系统可手工接入标准 stdio：`command` 为本机 Node 可执行文件，`args` 为共享包 `src/bootstrap.mjs` 的绝对路径，`env` 指定各自的配置、数据和FFmpeg/FFprobe路径；可按需设置 `AGENT_VIDEO_YTDLP`。Node代码按平台运行，但本包的启动/安装脚本是Windows版本，附带的yt-dlp.exe也是Windows二进制；Linux/macOS需要自行准备相应平台依赖。不能直接把Windows配置路径复制过去。
 

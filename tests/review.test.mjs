@@ -99,21 +99,37 @@ test('guard prompts continuation only for this connection and is bounded when no
   }finally{await c.close();await independent.close();}
 });
 
-test('chosen text pages must be read; unrelated text failures do not force ASR or block a visual-only plan',async()=>{
-  const {id,directory}=await fixture(),s=new VideoService({dataDir:root}),r=new ReviewService(s);
+test('visual plans do not track text pages or wait for transcript processing',async()=>{
+  const {id}=await fixture(),s=new VideoService({dataDir:root}),r=new ReviewService(s);
   try{
     const j=await s.job(id),trackId=randomUUID();
-    j.transcriptTracks=[{id:trackId,status:'complete',eventCount:2}];
-    await r.action({id,action:'plan',visual:'none',textTrackIds:[trackId]});
-    await r.textResponse(id,{id:trackId,segments:[{sequence:2,text:'last cue'}]});
-    assert.equal((await r.action({id,action:'finish'})).info.finished,false,'jumping to last cue cannot hide a missed first page');
-    await r.textResponse(id,{id:trackId,segments:[{sequence:1,text:'first cue'}]});
-    assert.equal((await r.action({id,action:'finish'})).info.finished,true);
-    j.transcriptTracks.push({id:randomUUID(),status:'error',eventCount:0});
+    j.transcriptTracks=[{id:trackId,status:'running',eventCount:2},{id:randomUUID(),status:'error',eventCount:0}];
     await r.action({id,action:'plan',visual:'none'});
-    assert.equal((await r.action({id,action:'finish'})).info.finished,true);
+    const done=await r.action({id,action:'finish'});
+    assert.equal(done.info.finished,true);
+    assert.deepEqual(done.info.visualReview.plan,{visual:'none',indices:[]});
+    assert.equal('text' in done.info.visualReview,false);
+    assert.equal('textSeen' in r.sessions.get(id),false);
     j.resolved={resources:{subtitles:[]}};
     const noTracks=await s.text.start({id,mode:'subtitles'});assert.equal(noTracks.status,'no_tracks');assert.deepEqual(noTracks.availableTracks,[]);
+  }finally{await s.close();}
+});
+
+test('legacy text requirements are discarded on resume without losing visual receipts',async()=>{
+  const {id,directory}=await fixture(),s=new VideoService({dataDir:root}),r=new ReviewService(s);
+  try{
+    const j=await s.job(id),saved=await r.get(id),trackId=randomUUID();
+    saved.plan={visual:'selected',indices:[0],textTrackIds:[trackId]};
+    saved.textSeen={[trackId]:[2]};saved.acknowledged=[0];saved.sent=[0];
+    await r.save(j,saved);
+    const resumed=new ReviewService(s);
+    const done=await resumed.action({id,action:'finish',reviewId:saved.reviewId});
+    assert.equal(done.info.finished,true,'missing legacy text pages must not block a completed visual plan');
+    assert.deepEqual(done.info.visualReview.acknowledgedIndices,[0]);
+    assert.deepEqual(done.info.visualReview.plan,{visual:'selected',indices:[0]});
+    assert.equal('text' in done.info.visualReview,false);
+    const persisted=JSON.parse(await readFile(path.join(directory,'reviews',saved.reviewId+'.json'),'utf8'));
+    assert.equal('textSeen' in persisted,false);assert.equal('textTrackIds' in persisted.plan,false);
   }finally{await s.close();}
 });
 

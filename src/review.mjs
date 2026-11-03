@@ -14,7 +14,7 @@ export async function renameReview(temp,file,move=rename,delay=ms=>new Promise(r
   }
 }
 
-// Per-consumer evidence plans and image receipts, separate from production and
+// Per-consumer visual plans and image receipts, separate from production and
 // legacy server-side delivery counters. No semantic notes are stored here.
 export class ReviewService {
   constructor(service) { this.service=service;this.sessions=new Map();this.locks=new Map(); }
@@ -30,12 +30,15 @@ export class ReviewService {
       if(!uuid(resumeId))throw new Error('Invalid reviewId.');
       const restored=JSON.parse(await readFile(path.join(j.directory,'reviews',resumeId+'.json'),'utf8'));
       if(restored.jobId!==id||restored.mediaId!==j.mediaId||restored.schemaVersion!==1)throw new Error('Review does not belong to this media version.');
-      r=restored;this.sessions.set(id,r);
+      // Prior versions also tracked required text pages. They no longer form
+      // part of this image-only ledger; retain visual receipts when resuming.
+      r={...restored,plan:{visual:restored.plan.visual,indices:restored.plan.indices??[]}};
+      delete r.textSeen;this.sessions.set(id,r);
     }
     if(!r) {
       r={schemaVersion:1,jobId:id,mediaId:j.mediaId,reviewId:randomUUID(),state:'reading',
-        plan:{visual:'undecided',indices:[],textTrackIds:[]},acknowledged:[],sent:[],pending:null,
-        textSeen:{},createdAt:new Date().toISOString(),guard:{calls:0,stalls:0}};
+        plan:{visual:'undecided',indices:[]},acknowledged:[],sent:[],pending:null,
+        createdAt:new Date().toISOString(),guard:{calls:0,stalls:0}};
       this.sessions.set(id,r);await this.save(j,r);
     }
     return r;
@@ -51,23 +54,17 @@ export class ReviewService {
     if(!r)return undefined;
     const targets=r.plan.visual==='all'?Array.from({length:j.sheets},(_,i)=>i):r.plan.visual==='selected'?r.plan.indices:[];
     const seen=new Set(r.acknowledged),missing=targets.filter(i=>!seen.has(i));
-    const text=r.plan.textTrackIds.map(id=>{
-      const t=j.transcriptTracks?.find(t=>t.id===id),events=new Set(r.textSeen[id]??[]);
-      return {trackId:id,status:t?.status??'missing',eventCount:t?.eventCount??0,readEvents:events.size,
-        pagesRead:Boolean(t&&t.status==='complete'&&Array.from({length:t.eventCount??0},(_,i)=>i+1).every(i=>events.has(i)))};
-    });
     const reasons=[];
     if(r.plan.visual==='undecided')reasons.push('host_must_choose_evidence_scope');
     if(r.pending)reasons.push('image_batch_awaits_acknowledgement');
     if(missing.length)reasons.push('chosen_images_unread');
     if(r.plan.visual==='all'&&j.status!=='complete')reasons.push(working(j.status)?'visual_production_running':'visual_production_incomplete');
     if(r.plan.visual==='all'&&!j.sheets)reasons.push('no_images');
-    if(text.some(t=>!t.pagesRead))reasons.push('chosen_text_tracks_incomplete');
     const ready=!reasons.length;
     return {reviewId:r.reviewId,state:r.state,plan:r.plan,basis,generatedSheets:j.sheets,sentSheets:r.sent.length,
       acknowledgedSheets:r.acknowledged.length,acknowledgedIndices:r.acknowledged,requiredSheets:targets.length,
       missingChosenIndices:missing,pendingBatch:r.pending?{batchId:r.pending.batchId,indices:r.pending.indices}:null,
-      text,mechanicallyReady:ready,reasons,productionStatus:j.status,coverage:j.coverage,
+      mechanicallyReady:ready,reasons,productionStatus:j.status,coverage:j.coverage,
       nextAction:r.pending?{tool:'video_review',arguments:{id:j.id,action:'ack',batchId:r.pending.batchId,viewedIndices:r.pending.indices},
         condition:'Only after seeing the actual images. If the response was lost, use action=replay instead. Acknowledge only inspected indices; [] discards this batch without claiming it was viewed.'}:
         missing.length?{tool:'video_read',arguments:{id:j.id,after:missing[0]-1,limit:Math.min(12,missing.length)}}:
@@ -93,18 +90,6 @@ export class ReviewService {
       result.info={...result.info,visualReview:this.progress(j,r)};return result;
     });
   }
-  async textResponse(id,value) {
-    const j=await this.service.job(id);if(!visual(j))return value;
-    return this.locked(id,async()=>{
-      const r=await this.get(id);
-      if(value.id&&Array.isArray(value.segments)) {
-        const events=value.segments.map(s=>s.sequence).filter(Number.isInteger);
-        r.textSeen[value.id]=[...new Set([...(r.textSeen[value.id]??[]),...events])];
-        await this.save(j,r);
-      }
-      return {...value,visualReview:this.progress(j,r)};
-    });
-  }
   async action(args,signal) {
     return this.locked(args.id,async()=>{
       signal?.throwIfAborted();
@@ -113,10 +98,9 @@ export class ReviewService {
       const action=args.action??'status';
       if(action==='plan') {
         if(!['all','selected','none'].includes(args.visual))throw new Error('Choose visual=all, selected or none.');
-        const indices=[...new Set(args.indices??[])].sort((a,b)=>a-b),tracks=[...new Set(args.textTrackIds??[])];
+        const indices=[...new Set(args.indices??[])].sort((a,b)=>a-b);
         if(args.visual==='selected'&&(!indices.length||indices.some(i=>!Number.isInteger(i)||i<0||i>=5000)))throw new Error('selected requires 1..5000 valid zero-based sheet indices.');
-        if(tracks.some(id=>!j.transcriptTracks?.some(t=>t.id===id)))throw new Error('Selected text track does not belong to this job.');
-        r.plan={visual:args.visual,indices:args.visual==='selected'?indices:[],textTrackIds:tracks};
+        r.plan={visual:args.visual,indices:args.visual==='selected'?indices:[]};
         r.state='reading';r.guard={calls:0,stalls:0};
       } else if(action==='ack') {
         if(!r.pending||args.batchId!==r.pending.batchId)throw new Error('batchId does not match the pending batch.');
@@ -138,7 +122,7 @@ export class ReviewService {
       } else if(action==='finish') {
         const progress=this.progress(j,r);
         if(!progress.mechanicallyReady)return {info:{id:j.id,finished:false,visualReview:progress,
-          note:'Finish the chosen evidence work or revise the plan if the user task permits. Missing subtitles do not block visual inspection. A partial-progress disclaimer does not complete feasible work.'},images:[]};
+          note:'Finish the chosen visual work or revise the plan if the user task permits. This check does not track text reading. A partial-progress disclaimer does not complete feasible work.'},images:[]};
         r.state='finished';
       } else if(action!=='status')throw new Error('Unknown review action.');
       await this.save(j,r);
@@ -155,7 +139,7 @@ export class ReviewService {
     for(const [id] of this.sessions)await this.locked(id,async()=>{
       const j=await this.service.job(id),r=this.sessions.get(id);
       if(r.state!=='reading'||(!working(j.status)&&j.status!=='complete'))return;
-      const p=this.progress(j,r),signature=JSON.stringify([j.sheets,r.acknowledged.length,r.pending?.batchId,r.plan,Object.values(r.textSeen).map(s=>s.length)]);
+      const p=this.progress(j,r),signature=JSON.stringify([j.sheets,r.acknowledged.length,r.pending?.batchId,r.plan]);
       r.guard.calls++;r.guard.stalls=signature===r.guard.signature?r.guard.stalls+1:0;r.guard.signature=signature;
       await this.save(j,r);
       if(r.guard.calls<=8&&r.guard.stalls<3)pending.push({id,review:p});

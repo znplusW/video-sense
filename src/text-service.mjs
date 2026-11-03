@@ -1,7 +1,6 @@
 import { mkdir,readFile,writeFile,stat } from 'node:fs/promises';
 import { randomUUID,createHash } from 'node:crypto';
 import path from 'node:path';
-import { localFile } from './media.mjs';
 import { createNetworkProxy,fetchNetworkText,redactNetworkError } from './network.mjs';
 import { parseTranscript,queryTranscript,mergeSegments } from './transcript.mjs';
 import { mapAsrSegments } from './audio.mjs';
@@ -10,6 +9,7 @@ import { loadAsrConfig,doctorAsr,transcribeAudio,closeAsr,asrCacheIdentity } fro
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const working=s=>['starting','running'].includes(s);
+export const sameSource=t=>t?.origin==='media_task'||typeof t?.cacheKey==='string';
 const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 export async function mediaIdentity(spec) {
   if(spec.mode==='file'){const s=await stat(spec.file);return 'media_'+digest({file:spec.file,size:s.size,mtimeMs:s.mtimeMs});}
@@ -40,15 +40,17 @@ export class TextService {
     if(!j.metadata)throw new Error('Media metadata not ready; try again later.');
   }
   async load(j,id){
-    id??=j.transcriptTracks?.at(-1)?.id;
-    if(!id||!j.transcriptTracks?.some(t=>t.id===id))throw new Error('Transcript track not found; import text or start transcription first.');
+    id??=j.transcriptTracks?.filter(sameSource).at(-1)?.id;
+    if(!id||!j.transcriptTracks?.some(t=>t.id===id))throw new Error('Transcript track not found; start same-source subtitle retrieval or transcription first.');
     const key=j.id+':'+id;
     if(!this.tracks.has(key)){
       const t=JSON.parse(await readFile(path.join(j.directory,'transcripts',id+'.json'),'utf8'));
       if(working(t.status)){t.status='interrupted';t.error='Original text task is no longer attached.';}
       this.tracks.set(key,t);
     }
-    return this.tracks.get(key);
+    const track=this.tracks.get(key);
+    if(!sameSource(track))throw new Error('Legacy external transcript is not a same-source media track. Use the external text directly in the Agent; it is no longer served by this MCP.');
+    return track;
   }
   async store(j,t){
     const dir=path.join(j.directory,'transcripts');await mkdir(dir,{recursive:true});
@@ -67,25 +69,6 @@ export class TextService {
     t.segments=mergeSegments(t.segments,incoming);
     for(const segment of incoming)t.events.push({sequence:t.events.length+1,...segment});
   }
-  async import(args){
-    return this.register(()=>this.importUnlocked(args));
-  }
-  async importUnlocked(args){
-    const j=await this.owner.job(args.id);await this.ready(j);
-    if(args.mediaId!==j.mediaId)throw new Error('mediaId must match this media task. Read audio_status or video_status first.');
-    if(j.kind==='audio'&&j.sourceType==='file'&&j.mediaId!==await mediaIdentity({mode:'file',file:j.source}))throw new Error('Local audio version changed; reopen the source before binding text.');
-    if((j.transcriptTracks?.length??0)>=8)throw new Error('At most eight text tracks per job.');
-    const file=await localFile(args.file);if((await stat(file)).size>10*1024**2)throw new Error('Transcript import exceeds 10 MiB.');
-    const raw=await readFile(file,'utf8'),format=(args.format??path.extname(file).slice(1)).toLowerCase();
-    const source={...(args.sourceType?{type:args.sourceType}:format==='json'?{}:{type:'subtitle',subtitleKind:'unknown'}),
-      ...(args.language?{language:args.language}:{}),...(args.trackId?{trackId:args.trackId}:{}),...(args.subtitleKind?{subtitleKind:args.subtitleKind}:{})};
-    const track=parseTranscript(raw,{format,source,offsetSeconds:args.offsetSeconds??0,duration:j.metadata.duration??undefined,mediaId:j.mediaId,bindingBasis:args.bindingBasis});
-    const range=j.kind==='audio'?j.range:null;
-    if(range&&track.alignment==='aligned')track.segments=track.segments.filter(s=>s.end>range.start&&s.start<range.end);
-    const t={...track,id:randomUUID(),status:'complete',createdAt:new Date().toISOString(),requestedRange:j.range,processedRanges:track.segments.map(s=>({start:Math.max(range?.start??0,s.start),end:Math.min(range?.end??Infinity,s.end)})),
-      coverageBasis:'Only supplied cue intervals; text gaps do not establish silence or full transcription coverage.',events:track.segments.map((s,i)=>({sequence:i+1,...s}))};
-    await this.store(j,t);return summary(t);
-  }
   async resources(j,signal){
     await this.ready(j,signal);
     if((j.kind==='url'||(j.kind==='audio'&&j.sourceType==='url'))&&!j.resolved)throw new Error('Private media resolution is unavailable after server restart; reopen the original URL to avoid guessing media identity.');
@@ -99,7 +82,7 @@ export class TextService {
     const j=await this.owner.job(args.id);
     const epoch=j.textEpoch??0;
     if(this.owner.closed)throw new Error('Service is closed.');
-    if((j.transcriptTracks?.length??0)>=8)throw new Error('At most eight text tracks per job.');
+    if((j.transcriptTracks?.filter(sameSource).length??0)>=8)throw new Error('At most eight text tracks per job.');
     if(this.running.size>=2)throw new Error('At most two active text tasks per server.');
     const mode=args.mode??'asr';
     if(!['asr','subtitles'].includes(mode))throw new Error('Text mode must be asr or subtitles.');
@@ -107,11 +90,11 @@ export class TextService {
       const resources=await this.resources(j);
       const availableTracks=(resources?.subtitles??[]).map(({url,headers,...t})=>t);
       return {id:j.id,mediaId:j.mediaId,status:availableTracks.length?'selection_required':'no_tracks',availableTracks,
-        note:availableTracks.length?'Choose an explicit subtitle trackId. No subtitle was imported or validated for synchronization.':
+        note:availableTracks.length?'Choose an explicit subtitle trackId. No subtitle was fetched or validated for synchronization.':
           'No subtitle tracks were resolved. This does not mean the source has no audio or speech. Continue the host-chosen visual workflow; optional ASR is a separate decision based on the user request.'};
     }
     const config=mode==='asr'?await loadAsrConfig():null;
-    if(mode==='asr'&&!config)throw new Error('ASR is not configured. Import subtitles/external JSON, or configure an optional backend; existing media/text evidence remains available.');
+    if(mode==='asr'&&!config)throw new Error('ASR is not configured. Configure an optional backend or select available same-source network subtitles; visual evidence remains available. External text stays with the Agent.');
     if(args.backend&&args.backend!==config?.backend)throw new Error('Requested backend is not the configured backend.');
     await this.ready(j);
     const backendIdentity=config?await asrCacheIdentity(config):null;
@@ -119,7 +102,7 @@ export class TextService {
       ...(backendIdentity?.modelRevision.startsWith('identifier:')?{unresolvedModelRevisionNonce:randomUUID()}:{})});
     const cached=j.transcriptTracks?.find(t=>t.cacheKey===cacheKey&&t.status==='complete');
     if(cached&&!args.force)return {...cached,cached:true};
-    const t={id:randomUUID(),schemaVersion:'1',mediaId:j.mediaId,timeBase:'source_media_seconds',timeUnit:'seconds',status:'starting',source:{type:mode==='asr'?'asr':'subtitle'},
+    const t={id:randomUUID(),origin:'media_task',schemaVersion:'1',mediaId:j.mediaId,timeBase:'source_media_seconds',timeUnit:'seconds',status:'starting',source:{type:mode==='asr'?'asr':'subtitle'},
       binding:{basis:'Same job and selected source entry',syncVerified:false},mapping:{operation:'source seconds = block origin + backend relative seconds',precision:'Resampled sample position plus requested seek; backend timings are estimates.'},
       alignment:'aligned',segments:[],events:[],processedRanges:[],requestedRange:{start:args.start??j.range?.start??j.requestedRange?.start??0,end:args.end??j.range?.end},createdAt:new Date(requestedAt).toISOString(),cacheKey};
     await this.store(j,t);
@@ -152,7 +135,7 @@ export class TextService {
         }
         if(!resources.audio)throw new Error('No audio track resolved for the selected media entry.');
         await proxy.validate(resources.audio.url);input={...resources.audio,proxy};t.audioSource={kind:resources.audio.kind,formatId:resources.audio.formatId};
-      }else if(args.mode==='subtitles')throw new Error('For local subtitles, use transcript_import with a local SRT/VTT/JSON file.');
+      }else if(args.mode==='subtitles')throw new Error('Same-source subtitle retrieval requires a resolved network subtitle track. Local external subtitles stay with the Agent; use optional ASR for local media.');
       t.status='running';t.phase='acquiring_audio';t.source={type:'asr',backend:config.backend,model:config.model,device:config.device,...(args.language?{language:args.language}:{})};
       const directory=path.join(j.directory,'transcripts',t.id+'-audio');await mkdir(directory,{recursive:true});await this.store(j,t);
       const began=performance.now();
@@ -176,7 +159,7 @@ export class TextService {
   }
   async read(args,signal){
     const j=await this.owner.job(args.id);
-    if(!j.transcriptTracks?.length)return {schemaVersion:'1',jobId:j.id,mediaId:j.mediaId,status:'not_enabled',segments:[],nextAfter:0};
+    if(!args.trackId&&!j.transcriptTracks?.some(sameSource))return {schemaVersion:'1',jobId:j.id,mediaId:j.mediaId,status:'not_enabled',segments:[],nextAfter:0};
     const t=await this.load(j,args.trackId),after=args.after??0,limit=args.limit??100;
     if(!Number.isInteger(after)||after<0||!Number.isInteger(limit)||limit<1||limit>500)throw new Error('after >=0, limit 1..500 required.');
     const start=args.start??0,end=args.end??Infinity;
@@ -208,7 +191,7 @@ export class TextService {
       images.push(image);frames.push(...matches);
     }
     const texts=[];
-    for(const index of j.transcriptTracks??[]){const t=await this.load(j,index.id);texts.push({trackId:t.id,status:t.status,...queryTranscript(t,{start,end,limit:args.textLimit??100})});}
+    for(const index of (j.transcriptTracks??[]).filter(sameSource)){const t=await this.load(j,index.id);texts.push({trackId:t.id,status:t.status,...queryTranscript(t,{start,end,limit:args.textLimit??100})});}
     const info={schemaVersion:'1',jobId:j.id,mediaId:j.mediaId,timeBase:'source_media_seconds',timeUnit:'seconds',requestedRange:{start,end},
       timestampAccuracy:'Video frame times are requested seek + 12fps output sample grid estimates, not exact source PTS.',frames,
       transcripts:texts,relations:frames.map(f=>({sheetIndex:f.sheetIndex,frameNumber:f.frameNumber,time:f.t,segments:texts.flatMap(t=>t.segments.filter(s=>s.start<=f.t&&s.end>f.t).map(s=>({trackId:t.trackId,segmentId:s.id})))})),
